@@ -1,0 +1,45 @@
+(dependencies)
+sudo apt-get install libncurses5-dev openssl libssl-dev
+sudo apt-get install build-essential openssl
+sudo apt-get install pkg-config
+sudo apt-get install libc6-dev
+sudo apt-get install bison
+sudo apt-get install flex
+sudo apt-get install libelf-dev
+sudo apt-get install zlibc minizip
+sudo apt-get install libidn11-dev libidn11
+
+
+sudo gedit arch/x86/entry/syscalls/syscall_64.tbl
+
+common	first			sys_first
+common	second			sys_second
+
+sudo gedit include/linux/syscalls.h 
+
+(before for __ARCH_WANT_SYS_IPC)
+asmlinkage long sys_first(void);
+asmlinkage long sys_second(int number);
+
+sudo gedit kernel/sys.c
+
+(before #endif)
+SYSCALL_DEFINE0(first)
+{
+        printk("Hello!\n");
+        return 0;
+}
+SYSCALL_DEFINE1(second, int, number)
+{
+        printk("The number is %d\n", number);
+        return number;
+}
+
+sudo make mrproper
+sudo make clean
+sudo make menuconfig
+
+sudo make -j4
+
+sudo make modules_install
+sudo make install
