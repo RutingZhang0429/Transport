@@ -1,0 +1,92 @@
+(dependencies)
+sudo apt-get install libncurses5-dev openssl libssl-dev
+sudo apt-get install build-essential openssl
+sudo apt-get install pkg-config
+sudo apt-get install libc6-dev
+sudo apt-get install bison
+sudo apt-get install flex
+sudo apt-get install libelf-dev
+sudo apt-get install zlibc minizip
+sudo apt-get install libidn11-dev libidn11
+
+sudo apt-get install lib32ncurses5-dev
+sudo apt-get install gcc gdb bison flex
+sudo apt-get install libncurses5-dev libssl-dev
+sudo apt-get install libidn11-dev libidn11
+sudo apt-get install zlibc minizip
+sudo apt-get install build-essential openssl
+sudo apt-get install libelf-dev
+
+
+
+sudo gedit arch/x86/entry/syscalls/syscall_64.tbl
+
+common	first			sys_first
+common	second			sys_second
+
+64	add			sys_add
+64	max			sys_max
+
+sudo gedit include/linux/syscalls.h 
+
+(before for __ARCH_WANT_SYS_IPC)
+asmlinkage long sys_first(void);
+asmlinkage long sys_second(int number);
+(before #endif)
+asmlinkage int sys_add(int a,int b);
+asmlinkage int sys_max(int a,int b,int c);
+
+sudo gedit kernel/sys.c
+
+(before #endif)
+SYSCALL_DEFINE0(first)
+{
+        printk("Hello!\n");
+        return 0;
+}
+SYSCALL_DEFINE1(second, int, number)
+{
+        printk("The number is %d\n", number);
+        return number;
+}
+
+(before #ifdef CONFIG_COMPAT)
+SYSCALL_DEFINE2(add,int,a,int,b)
+{
+	return a+b;
+}
+SYSCALL_DEFINE3(max,int,a,int,b,int,c)
+{
+	if(a>=b)
+	{
+		if(a>=c)
+			return a;
+		else
+			return c;	
+	}
+	else
+	{
+		if(b>=c)
+			return b;
+		else
+			return c;
+	}
+}
+
+sudo make mrproper
+sudo make clean
+sudo make menuconfig
+(save&exit)
+
+(edit .config)
+CONFIG_SYSTEM_TRUSTED_KEYS=""
+CONFIG_SYSTEM_REVOCATION_KEYS=""
+
+sudo apt-get install dwarves
+
+sudo make -j4
+
+sudo make modules_install
+sudo make install
+
+update-grub2
